@@ -22,12 +22,16 @@ macro(bob_begin_package)
   set(BUILD_TESTING OFF CACHE STRING "Build and run tests")
   include(CTest)
   enable_testing()
+  option(BUILD_SHARED_LIBS "Build shared libraries" OFF)
   #If not building shared libs, then prefer static
   #dependency libs
   if(NOT BUILD_SHARED_LIBS)
     set(CMAKE_FIND_LIBRARY_SUFFIXES ".a" ".so" ".dylib")
   endif()
   bob_always_full_rpath()
+  message(STATUS "BUILD_TESTING: ${BUILD_TESTING}")
+  message(STATUS "BUILD_SHARED_LIBS: ${BUILD_SHARED_LIBS}")
+  message(STATUS "CMAKE_INSTALL_PREFIX: ${CMAKE_INSTALL_PREFIX}")
 endmacro(bob_begin_package)
 
 function(bob_begin_cxx_flags)
@@ -35,12 +39,12 @@ function(bob_begin_cxx_flags)
   option(${PROJECT_NAME}_CXX_SYMBOLS "Compile C++ with debug symbols" ON)
   option(${PROJECT_NAME}_CXX_WARNINGS "Compile C++ with warnings" ON)
   set(FLAGS "")
-  if(${PROJECT_NAME}_OPTIMIZE)
+  if(${PROJECT_NAME}_CXX_OPTIMIZE)
     set(FLAGS "${FLAGS} -O2")
   else()
     set(FLAGS "${FLAGS} -O0")
   endif()
-  if(${PROJECT_NAME}_SYMBOLS)
+  if(${PROJECT_NAME}_CXX_SYMBOLS)
     set(FLAGS "${FLAGS} -g")
   endif()
   if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
@@ -59,7 +63,7 @@ function(bob_begin_cxx_flags)
     message(WARNING "Unexpected compiler type ${CMAKE_CXX_COMPILER_ID}")
   endif()
   set(CMAKE_CXX_FLAGS "${FLAGS}" PARENT_SCOPE)
-endfunction(bob_cxx_flags)
+endfunction(bob_begin_cxx_flags)
 
 function(bob_cxx11_flags)
   set(FLAGS "${CMAKE_CXX_FLAGS}")
@@ -85,7 +89,7 @@ function(bob_end_cxx_flags)
   set(CMAKE_CXX_FLAGS "${FLAGS}" PARENT_SCOPE)
 endfunction(bob_end_cxx_flags)
 
-macro(bob_find_package pkg_name version default)
+macro(bob_private_dep pkg_name version default)
   option(${PROJECT_NAME}_USE_${pkg_name} "Whether to use ${pkg_name}" ${default})
   message(STATUS "${PROJECT_NAME}_USE_${pkg_name}: ${${PROJECT_NAME}_USE_${pkg_name}}")
   if(${PROJECT_NAME}_USE_${pkg_name})
@@ -93,25 +97,41 @@ macro(bob_find_package pkg_name version default)
     if (${pkg_name}_PREFIX)
       #if ${pkg_name}_PREFIX is set, don't find it anywhere else:
       find_package(${pkg_name} ${version} REQUIRED PATHS ${${pkg_name}_PREFIX} NO_DEFAULT_PATH)
-      set(${PROJECT_NAME}_DEP_PREFIXES ${${PROJECT_NAME}_DEP_PREFIXES}
-          ${${pkg_name}_PREFIX})
     else()
       #allow CMake to search other prefixes if ${pkg_name}_PREFIX is not set
       find_package(${pkg_name} ${version} REQUIRED)
     endif()
+    if(${pkg_name}_CONFIG)
+      message(STATUS "${pkg_name}_CONFIG: ${${pkg_name}_CONFIG}")
+    endif()
+  endif()
+endmacro(bob_private_dep)
+
+macro(bob_public_dep pkg_name version default)
+  bob_private_dep(${pkg_name} "${version}" ${default})
+  if(${PROJECT_NAME}_USE_${pkg_name})
+    if (${pkg_name}_PREFIX)
+      set(${PROJECT_NAME}_DEP_PREFIXES ${${PROJECT_NAME}_DEP_PREFIXES}
+          ${${pkg_name}_PREFIX})
+    endif()
     set(${PROJECT_NAME}_DEPS ${${PROJECT_NAME}_DEPS} ${pkg_name})
   endif()
-endmacro(bob_find_package)
+endmacro(bob_public_dep)
 
 function(bob_export_target tgt_name)
-  install(TARGETS ${tgt_name} EXPORT ${tgt_name}-target DESTINATION lib)
-  install(EXPORT mult_nums-target NAMESPACE ${PROJECT_NAME}::
-          DESTINATION lib/${PROJECT_NAME})
-  set(${PROJECT_NAME}_TARGETS ${PROJECT_NAME}_TARGETS ${tgt_name} PARENT_SCOPE)
+  install(TARGETS ${tgt_name} EXPORT ${tgt_name}-target
+      RUNTIME DESTINATION bin
+      ARCHIVE DESTINATION lib
+      LIBRARY DESTINATION lib)
+  install(EXPORT ${tgt_name}-target NAMESPACE ${PROJECT_NAME}::
+          DESTINATION lib/cmake/${PROJECT_NAME})
+  set(${PROJECT_NAME}_EXPORTED_TARGETS
+      ${${PROJECT_NAME}_EXPORTED_TARGETS} ${tgt_name} PARENT_SCOPE)
 endfunction(bob_export_target)
 
 macro(bob_end_subdir)
-  set(${PROJECT_NAME}_TARGETS ${${PROJECT_NAME}_TARGETS} omega_h PARENT_SCOPE)
+  set(${PROJECT_NAME}_EXPORTED_TARGETS
+      ${${PROJECT_NAME}_EXPORTED_TARGETS} PARENT_SCOPE)
   set(${PROJECT_NAME}_DEPS ${${PROJECT_NAME}_DEPS} PARENT_SCOPE)
   set(${PROJECT_NAME}_DEP_PREFIXES ${${PROJECT_NAME}_DEP_PREFIXES} PARENT_SCOPE)
 endmacro(bob_end_subdir)
@@ -121,40 +141,33 @@ function(bob_end_package)
   set(INCLUDE_INSTALL_DIR include)
   set(LIB_INSTALL_DIR lib)
   set(CONFIG_CONTENT "
-  set(${PROJECT_NAME}_VERSION ${${PROJECT_NAME}_VERSION})
-  @PACKAGE_INIT@
-  include(CMakeFindDependencyMacro)
-  # we will use find_dependency, but we don't want to force
-  # our users to have to specify where all of our dependencies
-  # were installed; that defeats the whole point of automatically
-  # importing dependencies.
-  # since the documentation for find_dependency() doesn't mention
-  # a PATHS argument, we'll temporarily add the prefixes to
-  # CMAKE_PREFIX_PATH.
-  set(${PROJECT_NAME}_DEPS \"${${PROJECT_NAME}_DEPS}\")
-  set(${PROJECT_NAME}_DEP_PREFIXES \"${${PROJECT_NAME}_DEP_PREFIXES}\")
-  set(${PROJECT_NAME}_BACKUP_PREFIX_PATH \"\$\{CMAKE_PREFIX_PATH\}\")
-  set(CMAKE_PREFIX_PATH \"\$\{${PROJECT_NAME}_DEP_PREFIXES\};\$\{CMAKE_PREFIX_PATH\}\")
-  foreach(dep IN LISTS ${PROJECT_NAME}_DEPS)
-    find_dependency(\$\{dep\})
-  endforeach()
-  set(CMAKE_PREFIX_PATH \"\$\{${PROJECT_NAME}_BACKUP_PREFIX_PATH\}\")
-  set(${PROJECT_NAME}_TARGETS \"${${PROJECT_NAME}_TARGETS}\")
-  foreach(target IN LISTS ${PROJECT_NAME}_TARGETS)
-    include(${CMAKE_CURRENT_LIST_DIR}/${target}-target.cmake)
-  endforeach()
-  set(${PROJECT_NAME}_COMPILER \"${CMAKE_CXX_COMPILER}\")
-  set(${PROJECT_NAME}_CXX_FLAGS \"${CMAKE_CXX_FLAGS}\")
-  ")
+set(${PROJECT_NAME}_VERSION ${${PROJECT_NAME}_VERSION})
+include(CMakeFindDependencyMacro)
+# we will use find_dependency, but we don't want to force
+# our users to have to specify where all of our dependencies
+# were installed; that defeats the whole point of automatically
+# importing dependencies.
+# since the documentation for find_dependency() doesn't mention
+# a PATHS argument, we'll temporarily add the prefixes to
+# CMAKE_PREFIX_PATH.
+set(${PROJECT_NAME}_DEPS \"${${PROJECT_NAME}_DEPS}\")
+set(${PROJECT_NAME}_DEP_PREFIXES \"${${PROJECT_NAME}_DEP_PREFIXES}\")
+set(${PROJECT_NAME}_BACKUP_PREFIX_PATH \"\${CMAKE_PREFIX_PATH}\")
+set(CMAKE_PREFIX_PATH \"\${${PROJECT_NAME}_DEP_PREFIXES};\${CMAKE_PREFIX_PATH}\")
+foreach(dep IN LISTS ${PROJECT_NAME}_DEPS)
+  find_dependency(\${dep})
+endforeach()
+set(CMAKE_PREFIX_PATH \"\${${PROJECT_NAME}_BACKUP_PREFIX_PATH}\")
+set(${PROJECT_NAME}_EXPORTED_TARGETS \"${${PROJECT_NAME}_EXPORTED_TARGETS}\")
+foreach(tgt IN LISTS ${PROJECT_NAME}_EXPORTED_TARGETS)
+  include(\${CMAKE_CURRENT_LIST_DIR}/\${tgt}-target.cmake)
+endforeach()
+set(${PROJECT_NAME}_COMPILER \"${CMAKE_CXX_COMPILER}\")
+set(${PROJECT_NAME}_CXX_FLAGS \"${CMAKE_CXX_FLAGS}\")
+")
   file(WRITE
-      ${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}Config.cmake.in
-      "${CONFIG_CONTENT}")
-  configure_package_config_file(
-      ${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}Config.cmake.in
       ${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}Config.cmake
-      INSTALL_DESTINATION ${LIB_INSTALL_DIR}/${PROJECT_NAME}
-      PATH_VARS INCLUDE_INSTALL_DIR LIB_INSTALL_DIR
-      NO_CHECK_REQUIRED_COMPONENTS_MACRO)
+      "${CONFIG_CONTENT}")
   write_basic_package_version_file(
       ${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}ConfigVersion.cmake
       VERSION ${PROJECT_VERSION}
@@ -162,5 +175,5 @@ function(bob_end_package)
   install(FILES
     "${PROJECT_BINARY_DIR}/${PROJECT_NAME}Config.cmake"
     "${PROJECT_BINARY_DIR}/${PROJECT_NAME}ConfigVersion.cmake"
-    DESTINATION lib/${PROJECT_NAME})
+    DESTINATION lib/cmake/${PROJECT_NAME})
 endfunction(bob_end_package)

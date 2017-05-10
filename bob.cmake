@@ -186,6 +186,21 @@ macro(bob_public_dep pkg_name)
   endif()
 endmacro(bob_public_dep)
 
+function(bob_target_includes lib_name)
+  #find local headers even with #include <>
+  target_include_directories(${lib_name}
+      PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>)
+  #find generated configuration headers
+  target_include_directories(${lib_name}
+      PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>)
+endfunction(bob_target_includes)
+
+function(bob_library_includes lib_name)
+  bob_target_includes("${lib_name}")
+  #ensure downstream users include installed headers
+  target_include_directories(${lib_name} INTERFACE $<INSTALL_INTERFACE:include>)
+endfunction(bob_library_includes)
+
 function(bob_export_target tgt_name)
   install(TARGETS ${tgt_name} EXPORT ${tgt_name}-target
       RUNTIME DESTINATION bin

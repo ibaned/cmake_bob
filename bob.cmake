@@ -176,7 +176,7 @@ macro(bob_private_dep pkg_name)
 endmacro(bob_private_dep)
 
 macro(bob_public_dep pkg_name)
-  bob_private_dep(${pkg_name} "${version}" ${on_default})
+  bob_private_dep(${pkg_name} "${version}")
   if(${PROJECT_NAME}_USE_${pkg_name})
     if (${pkg_name}_PREFIX)
       set(${PROJECT_NAME}_DEP_PREFIXES ${${PROJECT_NAME}_DEP_PREFIXES}
